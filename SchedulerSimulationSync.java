@@ -53,52 +53,86 @@ class Config {
 // ⚠️ SHARED STATISTICS: updated by ALL the process threads at the same time ⚠️
 // (these are the three "features" you counted in Assignment 1: context switches, completed processes, time)
 class SharedStats {
-    static int totalProcesses = 0;            // set once by main (never modified afterwards)
-    static int totalCPUs = 0;                 // set once by main (never modified afterwards)
-    static int contextSwitchCount = 0;        // shared counter: incremented every time a process starts a quantum
-    static int completedProcessCount = 0;     // shared counter: incremented every time a process finishes
-    static long totalServiceTime = 0;         // shared accumulator: sum of the CPU time (ms) actually executed
+    static int totalProcesses = 0;
+    static int totalCPUs = 0;
+    static int contextSwitchCount = 0;
+    static int completedProcessCount = 0;
+    static long totalServiceTime = 0;
+
     // Number of times a CPU found the ready queue empty and polled it again (busy waiting). Must be 0 after Feature 3.
     static final java.util.concurrent.atomic.AtomicInteger busyWaitPolls = new java.util.concurrent.atomic.AtomicInteger(0);
+
+    // Feature 2: Lock protecting all shared statistics
+    private static final ReentrantLock statsLock = new ReentrantLock();
 
     // TODO Feature 2: declare the lock(s) protecting the three shared variables above here.
     // Think about it: ONE lock for the three variables, or ONE lock PER variable? (you must justify it in MY_WORK.md)
 
     public static void incrementContextSwitch() {
-        // TODO Feature 2: protect this critical section
-        int tmp = contextSwitchCount;       // 1) read
-        RaceWindow.pause();                 //    <- another thread can read the SAME value here
-        contextSwitchCount = tmp + 1;       // 2) write  (one increment is lost if someone else did the same)
+        // Feature 2: Protect the context switch counter
+        statsLock.lock();
+        try {
+            int tmp = contextSwitchCount;
+            RaceWindow.pause();
+            contextSwitchCount = tmp + 1;
+        } finally {
+            statsLock.unlock();
+        }
     }
 
     public static void incrementCompletedProcess() {
-        // TODO Feature 2: protect this critical section
-        int tmp = completedProcessCount;
-        RaceWindow.pause();
-        completedProcessCount = tmp + 1;
+        // Feature 2: Protect the completed process counter
+        statsLock.lock();
+        try {
+            int tmp = completedProcessCount;
+            RaceWindow.pause();
+            completedProcessCount = tmp + 1;
+        } finally {
+            statsLock.unlock();
+        }
     }
 
     public static void addServiceTime(int ms) {
-        // TODO Feature 2: protect this critical section
-        long tmp = totalServiceTime;
-        RaceWindow.pause();
-        totalServiceTime = tmp + ms;
+        // Feature 2: Protect the total service time
+        statsLock.lock();
+        try {
+            long tmp = totalServiceTime;
+            RaceWindow.pause();
+            totalServiceTime = tmp + ms;
+        } finally {
+            statsLock.unlock();
+        }
     }
 
     // Readers must also be protected (a read in the middle of an update is not safe either)
     public static int getCompletedProcessCount() {
-        // TODO Feature 2: protect this read
-        return completedProcessCount;
+        // Feature 2: Protect the completed process counter read
+        statsLock.lock();
+        try {
+            return completedProcessCount;
+        } finally {
+            statsLock.unlock();
+        }
     }
 
     public static int getContextSwitchCount() {
-        // TODO Feature 2: protect this read
-        return contextSwitchCount;
+        // Feature 2: Protect the context switch counter read
+        statsLock.lock();
+        try {
+            return contextSwitchCount;
+        } finally {
+            statsLock.unlock();
+        }
     }
 
     public static long getTotalServiceTime() {
-        // TODO Feature 2: protect this read
-        return totalServiceTime;
+        // Feature 2: Protect the total service time read
+        statsLock.lock();
+        try {
+            return totalServiceTime;
+        } finally {
+            statsLock.unlock();
+        }
     }
 }
 
@@ -106,8 +140,8 @@ class SharedStats {
 // In Assignment 1 only the main thread used the queue. Now several CPUs poll and re-enqueue processes
 // at the same time, so every access to `list` and `map` is a critical section.
 class ReadyQueue {
-    private final LinkedList<Thread> list = new LinkedList<>();   // FIFO queue of threads
-    private final Map<Thread, Process> map = new HashMap<>();     // thread -> process (same idea as Assignment 1)
+    private final LinkedList<Thread> list = new LinkedList<>();
+    private final Map<Thread, Process> map = new HashMap<>();
 
     // Feature 1: Lock protecting the ready queue list and map
     private final ReentrantLock queueLock = new ReentrantLock();
@@ -143,9 +177,9 @@ class ReadyQueue {
             if (list.isEmpty()) {
                 return null;
             }
-            Thread head = list.getFirst();      // 1) read the head of the queue
-            RaceWindow.pause();                 //    <- another CPU can read the SAME head here
-            list.removeFirst();                 // 2) remove the head (it may be a different thread by now!)
+            Thread head = list.getFirst();
+            RaceWindow.pause();
+            list.removeFirst();
             return head;
         } finally {
             queueLock.unlock();
@@ -182,13 +216,13 @@ class ReadyQueue {
 // Class representing a process (same as Assignment 1) - executes ONE time quantum per thread start
 class Process implements Runnable {
     private final String name;
-    private final int burstTime;           // total CPU time needed (nominal ms)
-    private final int timeQuantum;         // maximum time per CPU access (nominal ms)
+    private final int burstTime;
+    private final int timeQuantum;
     private int remainingTime;
-    private final int priority;            // Assignment 1 - Feature 1: priority 1..10 (10 = highest), display only
-    private final long creationTime;       // Assignment 1 - Feature 3: for waiting / turnaround time
+    private final int priority;
+    private final long creationTime;
     private long completionTime = 0;
-    private volatile int cpuId = 0;        // the CPU thread that is currently running this process
+    private volatile int cpuId = 0;
 
     public Process(String name, int burstTime, int timeQuantum, int priority) {
         this.name = name;
@@ -215,7 +249,7 @@ class Process implements Runnable {
                 " [" + runTime + "ms]");
 
         try {
-            Thread.sleep(runTime / Config.TIME_SCALE);      // simulate the execution
+            Thread.sleep(runTime / Config.TIME_SCALE);
         } catch (InterruptedException e) {
             System.out.println(Colors.RED + "  ✗ " + name + " was interrupted." + Colors.RESET);
         }
@@ -288,7 +322,7 @@ class CpuWorker extends Thread {
             if (thread == null) {
                 // ⚠️ BUSY WAITING: the CPU keeps checking an empty queue instead of sleeping until
                 // a process is available. It wastes CPU time and needs the "completed == total" test above to stop.
-                SharedStats.busyWaitPolls.incrementAndGet();      // (counted for the verification block)
+                SharedStats.busyWaitPolls.incrementAndGet();
                 try {
                     Thread.sleep(20);
                 } catch (InterruptedException e) {
@@ -303,15 +337,15 @@ class CpuWorker extends Thread {
                     readyQueue.snapshot() + Colors.MAGENTA + "]" + Colors.RESET);
 
             process.setCpuId(cpuId);
-            thread.start();                      // run one quantum
+            thread.start();
             try {
-                thread.join();                   // wait for the end of the quantum
+                thread.join();
             } catch (InterruptedException e) {
                 System.out.println("CPU-" + cpuId + " interrupted.");
             }
 
             if (!process.isFinished()) {
-                readyQueue.add(process);         // not finished: back to the ready queue
+                readyQueue.add(process);
             }
 
             // TODO Feature 3: when the LAST process has completed, wake up the CPUs that are blocked on the
@@ -324,13 +358,13 @@ public class SchedulerSimulationSync {
     public static void main(String[] args) {
         // ⚠️ IMPORTANT: Put your student ID here to seed the random number generator
         // This makes your output unique to you - DO NOT forget to change this!
-        int studentID = 446540228;  // ← CHANGE THIS TO YOUR ACTUAL STUDENT ID
+        int studentID = 446540228;
 
         Random random = new Random(studentID);
 
         // Same random values as Assignment 1 (quantum, number of processes and burst times)
-        int timeQuantum = 2000 + random.nextInt(4) * 1000;       // 2000, 3000, 4000 or 5000 ms
-        int numProcesses = 10 + random.nextInt(11);              // 10 to 20 processes
+        int timeQuantum = 2000 + random.nextInt(4) * 1000;
+        int numProcesses = 10 + random.nextInt(11);
         int[] burstTimes = new int[numProcesses];
         for (int i = 0; i < numProcesses; i++) {
             burstTimes[i] = timeQuantum / 2 + random.nextInt(2 * timeQuantum + 1);
@@ -387,7 +421,7 @@ public class SchedulerSimulationSync {
         int expectedQuanta = 0;
         long expectedService = 0;
         for (int b : burstTimes) {
-            expectedQuanta += (b + timeQuantum - 1) / timeQuantum;     // ceil(b / quantum)
+            expectedQuanta += (b + timeQuantum - 1) / timeQuantum;
             expectedService += b;
         }
 
