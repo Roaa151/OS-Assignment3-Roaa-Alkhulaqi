@@ -4,6 +4,8 @@ import java.util.ArrayList;
 import java.util.Map;
 import java.util.HashMap;
 import java.util.Random;
+// Import the mutex lock class (Feature 1)
+import java.util.concurrent.locks.ReentrantLock;
 // TODO (Feature 1 and Feature 2): import java.util.concurrent.locks.ReentrantLock;
 // TODO (Feature 3):               import java.util.concurrent.Semaphore;
 
@@ -109,15 +111,24 @@ class ReadyQueue {
     private final Map<Thread, Process> map = new HashMap<>();     // thread -> process (same idea as Assignment 1)
 
     // TODO Feature 1: declare the lock protecting `list` and `map` here
+    // Mutex lock protecting list and map
+    private final ReentrantLock queueLock = new ReentrantLock();
 
     // TODO Feature 3: declare the counting semaphore that counts the processes waiting in the ready queue here
 
     // Add a process to the ready queue (new process, or a process that did not finish its quantum)
     public void add(Process process) {
         // TODO Feature 1: protect this critical section
-        Thread thread = new Thread(process);
-        list.add(thread);
-        map.put(thread, process);
+        // Acquire the queue lock before touching list and map
+        queueLock.lock();
+        try {
+            Thread thread = new Thread(process);
+            list.add(thread);
+            map.put(thread, process);
+        } finally {
+            // Always release the queue lock
+            queueLock.unlock();
+        }
 
         // TODO Feature 3: signal that one more process is available in the queue
 
@@ -130,29 +141,50 @@ class ReadyQueue {
     // Remove and return the thread at the head of the queue (or null if the queue is empty)
     public Thread poll() {
         // TODO Feature 1: protect this critical section
-        if (list.isEmpty()) {
-            return null;
+        // Acquire the queue lock before reading and removing the head
+        queueLock.lock();
+        try {
+            if (list.isEmpty()) {
+                return null;
+            }
+            Thread head = list.getFirst();      // 1) read the head of the queue
+            RaceWindow.pause();                 //    <- another CPU can read the SAME head here
+            list.removeFirst();                 // 2) remove the head (it may be a different thread by now!)
+            return head;
+        } finally {
+            // Always release the queue lock (also after a return)
+            queueLock.unlock();
         }
-        Thread head = list.getFirst();      // 1) read the head of the queue
-        RaceWindow.pause();                 //    <- another CPU can read the SAME head here
-        list.removeFirst();                 // 2) remove the head (it may be a different thread by now!)
-        return head;
     }
 
     public Process processOf(Thread thread) {
         // TODO Feature 1: protect this access
-        return map.get(thread);
+        // Acquire the queue lock before reading the map
+        queueLock.lock();
+        try {
+            return map.get(thread);
+        } finally {
+            // Always release the queue lock
+            queueLock.unlock();
+        }
     }
 
     // Names of the processes currently waiting in the queue (used to display the ready queue)
     public String snapshot() {
         // TODO Feature 1: protect this critical section
-        StringBuilder sb = new StringBuilder();
-        for (Thread t : list) {
-            if (sb.length() > 0) sb.append(" → ");
-            sb.append(map.get(t).getName());
+        // Acquire the queue lock before iterating over the list
+        queueLock.lock();
+        try {
+            StringBuilder sb = new StringBuilder();
+            for (Thread t : list) {
+                if (sb.length() > 0) sb.append(" → ");
+                sb.append(map.get(t).getName());
+            }
+            return sb.length() == 0 ? "empty" : sb.toString();
+        } finally {
+            // Always release the queue lock
+            queueLock.unlock();
         }
-        return sb.length() == 0 ? "empty" : sb.toString();
     }
 }
 
